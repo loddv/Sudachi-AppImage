@@ -1,0 +1,83 @@
+name: Build Sudachi AppImage (Optimized)
+
+on:
+  push:
+    branches: [ main, master ]
+  release:
+    types: [ created, published ]
+  workflow_dispatch:                # Permite disparar manualmente
+
+jobs:
+  build:
+    name: Build Sudachi - ${{ matrix.variant }}
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        variant: [ x86_64_v3, znver2 ]
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            build-essential cmake ninja-build git ccache \
+            qt6-base-dev qt6-tools-dev qt6-tools-dev-tools \
+            qt6-multimedia-dev qt6-svg-dev libqt6opengl6-dev \
+            libgl1-mesa-dev libvulkan-dev libfuse2t64 \
+            appstream desktop-file-utils file wget curl \
+            dos2unix unzip xvfb
+
+      - name: Setup ccache (acelera builds repetidas)
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: sudachi-\( {{ matrix.variant }}- \){{ github.sha }}
+          max-size: 3G
+
+      - name: Make scripts executable
+        run: chmod +x *.sh
+
+      - name: Setup build environment
+        run: ./setup.sh
+
+      - name: Get dependencies
+        run: ./get-dependencies.sh
+
+      - name: Build Sudachi + Create AppImage
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          ./sudachi-appimage.sh "${{ matrix.variant }}"
+
+      - name: Rename AppImage for clarity
+        run: |
+          VERSION=$(cat \~/sudachi_version 2>/dev/null || echo "latest")
+          mv Sudachi-*.AppImage "Sudachi-\( {VERSION}- \){{ matrix.variant }}.AppImage" || true
+          mv *.zsync "Sudachi-\( {VERSION}- \){{ matrix.variant }}.AppImage.zsync" || true
+          ls -lh *.AppImage *.zsync
+
+      - name: Upload artifact (para download no Actions)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sudachi-AppImage-${{ matrix.variant }}
+          path: |
+            *.AppImage
+            *.zsync
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            *.AppImage
+            *.zsync
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
